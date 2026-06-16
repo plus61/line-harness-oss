@@ -23,6 +23,8 @@ export interface EmailEnv {
 interface SendResult {
   ok: boolean;
   channel: 'resend' | 'discord-fallback' | 'none';
+  /** Resend message id, when channel === 'resend' and the API returned one. */
+  id?: string;
   error?: string;
 }
 
@@ -74,7 +76,12 @@ async function postToResend(
           error: `Resend HTTP ${res.status}: ${errorBody.slice(0, 500)}`,
         };
       }
-      return { ok: true, channel: 'resend' };
+      const responseBody = await res.json<{ id?: string }>().catch(() => ({}) as { id?: string });
+      return {
+        ok: true,
+        channel: 'resend',
+        id: typeof responseBody?.id === 'string' ? responseBody.id : undefined,
+      };
     } catch (err) {
       return {
         ok: false,
