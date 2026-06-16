@@ -12,6 +12,7 @@ import {
   addEmailDmSuppression,
 } from '@line-crm/db';
 import { dispatchEmailDmCampaign } from '../services/email-dm.js';
+import { handleResendWebhook } from '../services/email-dm-webhook.js';
 import type { Env } from '../index.js';
 
 const emailDm = new Hono<Env>();
@@ -102,6 +103,27 @@ emailDm.post('/u/:code', async (c) => {
   });
 
   return c.html(renderUnsubscribePage('done', recipient.email));
+});
+
+// ── Resend webhook ingestion ────────────────────────────────────────────────
+
+// POST /api/email-dm/webhooks/resend — Svix-signed Resend event payloads.
+// Public endpoint (no bearer auth); request authenticity is verified via
+// RESEND_WEBHOOK_SECRET inside handleResendWebhook(). Resend retries on
+// non-2xx, so we always return 200 once the signature is valid even if the
+// message id doesn't map to one of our recipients.
+emailDm.post('/api/email-dm/webhooks/resend', async (c) => {
+  const rawBody = await c.req.text();
+  const outcome = await handleResendWebhook(c.env, rawBody, {
+    svixId: c.req.header('svix-id') ?? null,
+    svixTimestamp: c.req.header('svix-timestamp') ?? null,
+    svixSignature: c.req.header('svix-signature') ?? null,
+  });
+
+  if (!outcome.ok) {
+    return c.json({ success: false, error: outcome.reason }, 401);
+  }
+  return c.json({ success: true, data: outcome }, 200);
 });
 
 // ── Admin: campaigns ─────────────────────────────────────────────────────────

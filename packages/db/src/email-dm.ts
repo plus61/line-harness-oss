@@ -41,9 +41,14 @@ export interface EmailDmCampaign {
   status: EmailDmCampaignStatus;
   dispatch_started_at: string | null;
   dispatch_finished_at: string | null;
+  report_24h_sent_at: string | null;
+  report_48h_sent_at: string | null;
+  report_1w_sent_at: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export type EmailDmReportKind = '24h' | '48h' | '1w';
 
 export interface EmailDmRecipient {
   id: string;
@@ -57,6 +62,9 @@ export interface EmailDmRecipient {
   status: EmailDmRecipientStatus;
   resend_message_id: string | null;
   sent_at: string | null;
+  delivered_at: string | null;
+  opened_at: string | null;
+  open_count: number;
   first_click_at: string | null;
   click_count: number;
   unsubscribed_at: string | null;
@@ -151,6 +159,29 @@ export async function getEmailDmRecipientByCode(
     .first<EmailDmRecipient>();
 }
 
+export async function getEmailDmRecipientByResendMessageId(
+  db: D1Database,
+  resendMessageId: string,
+): Promise<EmailDmRecipient | null> {
+  return db
+    .prepare(`SELECT * FROM email_dm_recipients WHERE resend_message_id = ? LIMIT 1`)
+    .bind(resendMessageId)
+    .first<EmailDmRecipient>();
+}
+
+export async function getEmailDmRecipientByEmail(
+  db: D1Database,
+  campaignId: string,
+  email: string,
+): Promise<EmailDmRecipient | null> {
+  return db
+    .prepare(
+      `SELECT * FROM email_dm_recipients WHERE campaign_id = ? AND email = ? LIMIT 1`,
+    )
+    .bind(campaignId, email.toLowerCase())
+    .first<EmailDmRecipient>();
+}
+
 export async function listEmailDmRecipientsByCampaign(
   db: D1Database,
   campaignId: string,
@@ -227,6 +258,58 @@ export async function markEmailDmRecipientBounced(
        WHERE id = ?`,
     )
     .bind(now, reason.slice(0, 500), now, recipientId)
+    .run();
+}
+
+export async function markEmailDmRecipientDelivered(
+  db: D1Database,
+  recipientId: string,
+): Promise<void> {
+  const now = jstNow();
+  await db
+    .prepare(
+      `UPDATE email_dm_recipients
+       SET delivered_at = COALESCE(delivered_at, ?),
+           updated_at = ?
+       WHERE id = ?`,
+    )
+    .bind(now, now, recipientId)
+    .run();
+}
+
+export async function markEmailDmRecipientOpened(
+  db: D1Database,
+  recipientId: string,
+): Promise<void> {
+  const now = jstNow();
+  await db
+    .prepare(
+      `UPDATE email_dm_recipients
+       SET opened_at = COALESCE(opened_at, ?),
+           open_count = open_count + 1,
+           updated_at = ?
+       WHERE id = ?`,
+    )
+    .bind(now, now, recipientId)
+    .run();
+}
+
+export async function markEmailDmRecipientComplained(
+  db: D1Database,
+  recipientId: string,
+  notes: string | null,
+): Promise<void> {
+  const now = jstNow();
+  await db
+    .prepare(
+      `UPDATE email_dm_recipients
+       SET status = 'complained',
+           complained_at = ?,
+           last_error = ?,
+           updated_at = ?
+       WHERE id = ?`,
+    )
+    .bind(now, notes ? notes.slice(0, 500) : null, now, recipientId)
     .run();
 }
 
@@ -333,14 +416,18 @@ export interface EmailDmCampaignMetrics {
   total: number;
   pending: number;
   sent: number;
+  delivered: number;
   bounced: number;
   unsubscribed: number;
   complained: number;
   suppressed: number;
   total_clicks: number;
   unique_clickers: number;
+  total_opens: number;
+  unique_openers: number;
   first_sent_at: string | null;
   last_sent_at: string | null;
+  first_click_at: string | null;
 }
 
 export async function getEmailDmCampaignMetrics(
@@ -353,14 +440,18 @@ export async function getEmailDmCampaignMetrics(
          COUNT(*) AS total,
          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
          SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,
+         SUM(CASE WHEN delivered_at IS NOT NULL THEN 1 ELSE 0 END) AS delivered,
          SUM(CASE WHEN status = 'bounced' THEN 1 ELSE 0 END) AS bounced,
          SUM(CASE WHEN status = 'unsubscribed' THEN 1 ELSE 0 END) AS unsubscribed,
          SUM(CASE WHEN status = 'complained' THEN 1 ELSE 0 END) AS complained,
          SUM(CASE WHEN status = 'suppressed' THEN 1 ELSE 0 END) AS suppressed,
          COALESCE(SUM(click_count), 0) AS total_clicks,
          SUM(CASE WHEN click_count > 0 THEN 1 ELSE 0 END) AS unique_clickers,
+         COALESCE(SUM(open_count), 0) AS total_opens,
+         SUM(CASE WHEN open_count > 0 THEN 1 ELSE 0 END) AS unique_openers,
          MIN(sent_at) AS first_sent_at,
-         MAX(sent_at) AS last_sent_at
+         MAX(sent_at) AS last_sent_at,
+         MIN(first_click_at) AS first_click_at
        FROM email_dm_recipients
        WHERE campaign_id = ?`,
     )
@@ -372,14 +463,62 @@ export async function getEmailDmCampaignMetrics(
       total: 0,
       pending: 0,
       sent: 0,
+      delivered: 0,
       bounced: 0,
       unsubscribed: 0,
       complained: 0,
       suppressed: 0,
       total_clicks: 0,
       unique_clickers: 0,
+      total_opens: 0,
+      unique_openers: 0,
       first_sent_at: null,
       last_sent_at: null,
+      first_click_at: null,
     }
   );
+}
+
+// ── Reports (cron-driven Discord push) ───────────────────────────────────────
+
+export async function listEmailDmCampaignsDueForReport(
+  db: D1Database,
+): Promise<EmailDmCampaign[]> {
+  // Cron runs every 5min; pull campaigns that have finished dispatching and
+  // still have at least one outstanding report (24h / 48h / 1w).
+  const result = await db
+    .prepare(
+      `SELECT * FROM email_dm_campaigns
+       WHERE dispatch_finished_at IS NOT NULL
+         AND (
+           report_24h_sent_at IS NULL
+           OR report_48h_sent_at IS NULL
+           OR report_1w_sent_at IS NULL
+         )`,
+    )
+    .all<EmailDmCampaign>();
+  return result.results;
+}
+
+export async function markEmailDmCampaignReportSent(
+  db: D1Database,
+  campaignId: string,
+  kind: EmailDmReportKind,
+): Promise<void> {
+  const column =
+    kind === '24h'
+      ? 'report_24h_sent_at'
+      : kind === '48h'
+        ? 'report_48h_sent_at'
+        : 'report_1w_sent_at';
+  const now = jstNow();
+  await db
+    .prepare(
+      `UPDATE email_dm_campaigns
+       SET ${column} = COALESCE(${column}, ?),
+           updated_at = ?
+       WHERE id = ?`,
+    )
+    .bind(now, now, campaignId)
+    .run();
 }
