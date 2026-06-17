@@ -34,6 +34,12 @@ DEFAULT_TIER_UNKNOWN = DATA_DIR / "wayback-tier-unknown.csv"
 # Worker route that wraps every clickthrough; per-recipient code interpolated below.
 REDIRECT_TARGET_TEMPLATE = "https://demo.dragon-ai.jp/demo-{{fax_code}}.html"
 
+# 第二 CTA: 「demo HP を見る」より一段深い意向の読者向けに、直接 web ミーティングの
+# 予約画面を提示する。fax_code を渡すと crm-backend が source 別の流入計測に使える。
+# (= line-harness FAX DM と同じ流入計測テーブルに乗る)
+# 注: HTML/TEXT テンプレート内に直接埋め込んでいる。dispatcher の applyTemplate が
+# {{recipient_code}} / {{fax_code}} を per-recipient 値で置換する。
+
 DEFAULT_SUBJECT = (
     "【社労士事務所専用】AI チャットボット付きホームページを無料でご案内"
 )
@@ -65,6 +71,19 @@ HTML_TEMPLATE = """\
 
 <p>導入費用ゼロ、月額 1,980 円〜のトライアルプランからご利用いただけます。<br>
 ご興味をお持ちいただけましたら、上のボタンより 1 分で生成済みのデモ HP をご覧ください。</p>
+
+<div style="margin:32px 0;padding:20px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;">
+  <p style="margin:0 0 12px 0;color:#166534;font-weight:bold;font-size:15px;">
+    📅 直接ご相談されたい方はこちら
+  </p>
+  <p style="margin:0 0 14px 0;color:#166534;font-size:14px;">
+    {{office_name}} 様の活用方法を 30 分の web ミーティングで具体的にご提案します（無料）。
+    ご希望日時を画面でお選びいただけます。
+  </p>
+  <a href="https://web-booking-psi.vercel.app/dragon-ai?source=email_dm&amp;recipient_code={{recipient_code}}&amp;fax_code={{fax_code}}" style="display:inline-block;padding:12px 24px;background:#16a34a;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold;">
+    無料 web ミーティングを予約する
+  </a>
+</div>
 
 <p>不躾なご連絡となり申し訳ありません。<br>
 今後のご案内をご希望されない場合は、<a href="{{unsubscribe_url}}">こちら</a> から
@@ -99,6 +118,12 @@ TEXT_TEMPLATE = """\
 上のリンクから 1 分で生成済みのデモ HP をご覧いただけます。
 
 ──────────────────
+▼ 直接ご相談されたい方はこちら（無料 30 分 web ミーティング）
+https://web-booking-psi.vercel.app/dragon-ai?source=email_dm&recipient_code={{recipient_code}}&fax_code={{fax_code}}
+
+ご希望の日時を画面でお選びいただけます。
+──────────────────
+
 今後のご案内をご希望されない場合は、下記 URL からワンクリックで配信停止が可能です。
 {{unsubscribe_url}}
 ──────────────────
