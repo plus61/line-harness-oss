@@ -15,6 +15,7 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
     path.startsWith('/r/') ||
     path.startsWith('/goe/') ||  // email DM click tracking — public link in DM body
     path.startsWith('/u/') ||    // email DM one-click unsubscribe (RFC 8058) — public
+    path === '/api/email-dm/webhooks/resend' ||  // Resend webhook — Svix signature auth instead
     path.startsWith('/images/') ||
     path.startsWith('/api/liff/') ||
     path.startsWith('/auth/') ||

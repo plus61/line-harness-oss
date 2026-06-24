@@ -7,6 +7,7 @@ import { processScheduledBroadcasts } from './services/broadcast.js';
 import { processReminderDeliveries } from './services/reminder-delivery.js';
 import { checkAccountHealth } from './services/ban-monitor.js';
 import { refreshLineAccessTokens } from './services/token-refresh.js';
+import { runEmailDmReportSweep } from './services/email-dm-report.js';
 import { authMiddleware } from './middleware/auth.js';
 import { rateLimitMiddleware } from './middleware/rate-limit.js';
 import { webhook } from './routes/webhook.js';
@@ -55,7 +56,9 @@ export type Env = {
     RESEND_API_KEY?: string;  // Resend HTTP API key; if absent, sendEmail falls back to Discord webhook
     RESEND_FROM?: string;  // Override default transactional From (defaults to noreply@dragon-ai-tr.com)
     RESEND_DM_FROM?: string;  // Override default DM/marketing From (defaults to sato@dragon-ai.jp)
+    RESEND_WEBHOOK_SECRET?: string;  // Svix-format whsec_... secret for Resend webhook verification
     BOOKING_NOTIFY_EMAIL?: string;  // Recipient for booking-created internal notifications
+    EMAIL_DM_REPORT_DISCORD_WEBHOOK?: string;  // Discord webhook for cron-driven 24h/48h/1w campaign reports
   };
   Variables: {
     staff: { id: string; name: string; role: 'owner' | 'admin' | 'staff' };
@@ -186,6 +189,20 @@ async function scheduled(
   }
   jobs.push(checkAccountHealth(env.DB));
   jobs.push(refreshLineAccessTokens(env.DB));
+
+  // Email DM cron-driven Discord reports (idempotent via report_*_sent_at columns).
+  jobs.push(
+    runEmailDmReportSweep(env).then(
+      (summary) => {
+        if (summary.posted.length > 0 || summary.errors.length > 0) {
+          console.log('[email-dm] report sweep', JSON.stringify(summary));
+        }
+      },
+      (err) => {
+        console.error('[email-dm] report sweep failed', err);
+      },
+    ),
+  );
 
   await Promise.allSettled(jobs);
 }
