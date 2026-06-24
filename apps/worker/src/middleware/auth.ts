@@ -13,6 +13,8 @@ export async function authMiddleware(c: Context<Env>, next: Next): Promise<Respo
     path === '/api/affiliates/click' ||
     path.startsWith('/t/') ||
     path.startsWith('/r/') ||
+    path.startsWith('/goe/') ||  // email DM click tracking — public link in DM body
+    path.startsWith('/u/') ||    // email DM one-click unsubscribe (RFC 8058) — public
     path.startsWith('/images/') ||
     path.startsWith('/api/liff/') ||
     path.startsWith('/auth/') ||
